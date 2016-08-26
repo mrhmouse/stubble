@@ -26,6 +26,15 @@ interface HelperEntry {
     helper: Helper;
 }
 
+function resolvePath(data: {}, path: string) {
+    for (let name of path) {
+        if (data == null) break;
+        data = data[name];
+    }
+
+    return data;
+}
+
 class Template {
     private element: JQuery;
     private static helpers: HelperEntry[] = [];
@@ -94,12 +103,7 @@ class Template {
                     helper(e, this, tokens, data);
                 }
             } else {
-                let field = data;
-                for (let name of token.field.split('.')) {
-                    if (field == null) break;
-                    field = field[name];
-                }
-
+                let field = resolvePath(data, token.field);
                 if (field instanceof Node) {
                     e.appendChild(field);
                 } else if (field instanceof $) {
@@ -173,11 +177,7 @@ class Template {
 
     static replaceText(template: string, data: {}): string {
         return template.replace(/{{(\S+)}}/ig, (match, path) => {
-            let field = data;
-            for (let name of path.split('.')) {
-                field = field[name];
-            }
-
+            let field = resolvePath(data, path);
             if (field != null) return field.toString();
             return '';
         });
@@ -197,13 +197,7 @@ Template.registerHelper('each', (e, template, ts, data) => {
         loopedTokens.push(token);
     }
     
-    let fieldName = t.field.substr('#each '.length);
-    let field = data;
-    for (let name of fieldName.split('.')) {
-        if (field == null) break;
-        field = field[name];
-    }
-
+    let field = resolvePath(data, t.field.substr('#each '.length));
     if (field == null) return;
     
     if (field.length === undefined) {
@@ -220,15 +214,10 @@ Template.registerHelper('each', (e, template, ts, data) => {
 
 Template.registerHelper('with', (element, template, tokens, data) => {
     // TODO nested 'with' invocations
-    let newContext = data;
     let withToken = tokens.shift();
-    
-    for (let name of withToken.field.substr('#with '.length).split('.')) {
-        if (newContext == null) break;
-        newContext = newContext[name];
-    }
-
+    let newContext = resolvePath(data, withToken.field.substr('#with '.length));
     let block = [];
+    
     while (tokens.length) {
         let token = tokens.shift();
         if (token.type === 'field' && token.field === '/with') {
@@ -245,14 +234,10 @@ Template.registerHelper('with', (element, template, tokens, data) => {
 
 Template.registerHelper('if', (element, template, tokens, data) => {
     let ifToken = tokens.shift();
-    let result = data;
-    for (let name of ifToken.field.substr('#if '.length).split('.')) {
-        if (result == null) break;
-        result = result[name];
-    }
-
+    let result = resolvePath(data, ifToken.field.substr('#if '.length));
     let trueBranch = [];
     let elseBranch = [];
+    
     while (tokens.length) {
         let token = tokens.shift();
         if (token.type === 'field') {

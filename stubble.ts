@@ -1,68 +1,24 @@
 import $ = require('jquery');
 
-export type Token = TextToken | NodeToken | FieldToken;
-
-export interface TextToken {
-    type: 'text';
-    text: string;
-}
-
-export function isText(t: Token): t is TextToken {
-    return t.type === 'text';
-}
-
-export interface NodeToken {
-    type: 'node';
-    node: Node;
-    data: {};
-}
-
-export function isNode(t: Token): t is NodeToken {
-    return t.type === 'node';
-}
-
-export interface FieldToken {
-    type: 'field';
-    field: string;
-    data: {};
-}
-
-export function isField(t: Token): t is FieldToken {
-    return t.type === 'field';
-}
-
-export interface Helper {
-    (e: Node, template: Template, tokens: Token[], data: {}): void;
-}
-
-interface HelperEntry {
-    name: string;
-    helper: Helper;
-}
-
-export function resolvePath(data: {}, path: string) {
-    for (let name of path.split('.')) {
-        if (data == null) break;
-        data = data[name];
-    }
-
-    return data;
-}
-
 export class Template {
-    private element: JQuery;
+    private nodes: Node[];
     private static helpers: HelperEntry[] = [];
 
     constructor(template: string) {
-        this.element = $(template);
+        let temp = document.createElement('div');
+        temp.innerHTML = template;
+        this.nodes = slice<Node>(temp.childNodes);
     }
 
     render(data: {}): JQuery {
-        let result = this.element.clone();
-        result.each((i, e) => {
-            this.resolve(e, data);
-        });
+        let result = $('<div>');
+        for (let node of this.nodes) {
+            let child = node.cloneNode(true);
+            this.resolve(child, data);
+            result.append($(child));
+        }
 
+        result = result.contents();
         return result;
     }
 
@@ -130,7 +86,7 @@ export class Template {
     }
 
     parse(e: Node, data: {}): Token[] {
-        let nodes = Array.prototype.slice.call(e.childNodes);
+        let nodes = slice<Node>(e.childNodes);
         let tokens = [];
         for (let node of nodes) {
             if (node.nodeType === Node.TEXT_NODE) {
@@ -175,7 +131,7 @@ export class Template {
     }
 
     resolveAttributes(e: Element, data: {}) {
-        let attributes = Array.prototype.slice.call(e.attributes);
+        let attributes = slice<Attr>(e.attributes);
         for (let attr of attributes) {
             e.setAttribute(
                 attr.name,
@@ -192,8 +148,48 @@ export class Template {
     }
 }
 
-function hasLength(x: any): x is any[] {
-    return x != null && x.length;
+export type Token = TextToken | NodeToken | FieldToken;
+
+export interface TextToken {
+    type: 'text';
+    text: string;
+}
+
+export function isText(t: Token): t is TextToken {
+    return t.type === 'text';
+}
+
+export interface NodeToken {
+    type: 'node';
+    node: Node;
+    data: {};
+}
+
+export function isNode(t: Token): t is NodeToken {
+    return t.type === 'node';
+}
+
+export interface FieldToken {
+    type: 'field';
+    field: string;
+    data: {};
+}
+
+export function isField(t: Token): t is FieldToken {
+    return t.type === 'field';
+}
+
+export interface Helper {
+    (e: Node, template: Template, tokens: Token[], data: {}): void;
+}
+
+export function resolvePath(data: {}, path: string) {
+    for (let name of path.split('.')) {
+        if (data == null) break;
+        data = data[name];
+    }
+
+    return data;
 }
 
 export interface Block {
@@ -289,6 +285,19 @@ Template.registerHelper('each', (element, template, tokens, data) => {
     }
 });
 
+interface HelperEntry {
+    name: string;
+    helper: Helper;
+}
+
+function hasLength(x: any): x is any[] {
+    return x != null && x.length;
+}
+
 function isJQuery(x: any): x is JQuery {
     return x instanceof $;
+}
+
+function slice<T>(x: any): T[] {
+    return Array.prototype.slice.call(x);
 }

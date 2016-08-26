@@ -186,16 +186,11 @@ class Template {
 
 Template.registerHelper('each', (e, template, ts, data) => {
     // TODO else block
-    let loopedTokens = [];
     let t = ts.shift();
-    while (true) {
-        let token = ts.shift();
-        if (token.type === 'field' && token.field === '/each') {
-            break;
-        }
-
-        loopedTokens.push(token);
-    }
+    let loopedTokens = collectBlock(ts, {
+        startPrefix: '#each',
+        end: '/each'
+    });
     
     let field = resolvePath(data, t.field.substr('#each '.length));
     if (field == null) return;
@@ -212,20 +207,20 @@ Template.registerHelper('each', (e, template, ts, data) => {
     }
 });
 
-Template.registerHelper('with', (element, template, tokens, data) => {
-    let withToken = tokens.shift();
-    let newContext = resolvePath(data, withToken.field.substr('#with '.length));
+function collectBlock(
+    tokens: Token[],
+    opts: { startPrefix: string, end: string })
+: Token[]
+{
     let block = [];
     let depth = 1;
-    
     while (tokens.length) {
-        let token = tokens.shift();
         if (token.type === 'field') {
-            if (token.field === '/with') {
+            if (token.field === opts.end) {
                 if (--depth === 0) {
                     break;
                 }
-            } else if (0 === token.field.indexOf('#with')) {
+            } else if (0 === token.field.indexOf(opts.startPrefix)) {
                 depth++;
             }
         }
@@ -233,6 +228,16 @@ Template.registerHelper('with', (element, template, tokens, data) => {
         block.push(token);
     }
 
+    return block;
+}
+
+Template.registerHelper('with', (element, template, tokens, data) => {
+    let withToken = tokens.shift();
+    let newContext = resolvePath(data, withToken.field.substr('#with '.length));
+    let block = collectBlock(tokens, {
+        startPrefix: '#with',
+        end: '/with'
+    });
     while (block.length) {
         template.handleNextToken(element, block, newContext);
     }

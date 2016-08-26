@@ -5,10 +5,18 @@ interface TextToken {
     text: string;
 }
 
+function isText(t: Token): t is TextToken {
+    return t.type === 'text';
+}
+
 interface NodeToken {
     type: 'node';
     node: Node;
     data: {};
+}
+
+function isNode(t: Token): t is NodeToken {
+    return t.type === 'node';
 }
 
 interface FieldToken {
@@ -17,8 +25,12 @@ interface FieldToken {
     data: {};
 }
 
+function isField(t: Token): t is FieldToken {
+    return t.type === 'field';
+}
+
 interface Helper {
-    (e: Element, template: Template, tokens: Token[], data: {}): void;
+    (e: Node, template: Template, tokens: Token[], data: {}): void;
 }
 
 interface HelperEntry {
@@ -70,8 +82,8 @@ class Template {
         return null;
     }
 
-    resolve(e: Element, data: {}) {
-        if (e.attributes && e.attributes.length) {
+    resolve(e: Node, data: {}) {
+        if (e instanceof Element && e.attributes.length) {
             this.resolveAttributes(e, data);
         }
 
@@ -88,14 +100,11 @@ class Template {
         }
     }
 
-    handleNextToken(e: Element, tokens: Token[], data: {}) {
+    handleNextToken(e: Node, tokens: Token[], data: {}) {
         let token = tokens.shift();
-        switch (token.type) {
-        case 'text':
+        if (isText(token)) {
             e.appendChild(document.createTextNode(token.text));
-            break;
-            
-        case 'field':
+        } else if (isField(token)) {
             if (token.field[0] === '#') {
                 let helper = Template.findHelper(token.field.substr(1));
                 if (helper) {
@@ -112,16 +121,13 @@ class Template {
                     e.appendChild(document.createTextNode(field.toString()));
                 }
             }
-            break;
-            
-        case 'node':
+        } else if (isNode(token)) {
             e.appendChild(token.node);
             this.resolve(token.node, data);
-            break;
         }
     }
 
-    parse(e: Element, data: {}): Token[] {
+    parse(e: Node, data: {}): Token[] {
         let nodes = Array.prototype.slice.call(e.childNodes);
         let tokens = [];
         for (let node of nodes) {
@@ -184,11 +190,15 @@ class Template {
     }
 }
 
+function isArrayLike(x: any): x is any[] {
+    return x != null && x.length;
+}
+
 Template.registerHelper('each', (e, template, ts, data) => {
-    let t = ts.shift();
+    let t = (<FieldToken>ts.shift());
     let loop = collectBlock(ts, 'each');
     let field = resolvePath(data, t.field.substr('#each '.length));
-    if (field == null || !field.length) {
+    if (!isArrayLike(field)) {
         while (loop.second.length) {
             template.handleNextToken(e, loop.second, data);
         }
@@ -210,7 +220,7 @@ interface Block {
     second: Token[];
 }
 
-function collectBlock(tokens: Token[], name: string): Token[] {
+function collectBlock(tokens: Token[], name: string): Block {
     let result = {
         first: [],
         second: []
@@ -223,7 +233,7 @@ function collectBlock(tokens: Token[], name: string): Token[] {
     
     while (tokens.length) {
         let token = tokens.shift();
-        if (token.type === 'field') {
+        if (isField(token)) {
             if (token.field === end) {
                 if (--depth === 0) {
                     break;
@@ -242,7 +252,7 @@ function collectBlock(tokens: Token[], name: string): Token[] {
 }
 
 Template.registerHelper('with', (element, template, tokens, data) => {
-    let withToken = tokens.shift();
+    let withToken = (<FieldToken>tokens.shift());
     let newContext = resolvePath(data, withToken.field.substr('#with '.length));
     let block = collectBlock(tokens, 'with');
     let choice = newContext ? block.first : block.second;
@@ -252,7 +262,7 @@ Template.registerHelper('with', (element, template, tokens, data) => {
 });
 
 Template.registerHelper('if', (element, template, tokens, data) => {
-    let ifToken = tokens.shift();
+    let ifToken = (<FieldToken>tokens.shift());
     let result = resolvePath(data, ifToken.field.substr('#if '.length));
     let block = collectBlock(tokens, 'if');
     let branch = result ? block.first : block.second;

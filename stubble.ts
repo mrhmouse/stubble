@@ -194,24 +194,6 @@ function isArrayLike(x: any): x is any[] {
     return x != null && x.length;
 }
 
-Template.registerHelper('each', (e, template, ts, data) => {
-    let t = (<FieldToken>ts.shift());
-    let loop = collectBlock(ts, 'each');
-    let field = resolvePath(data, t.field.substr('#each '.length));
-    if (!isArrayLike(field)) {
-        while (loop.second.length) {
-            template.handleNextToken(e, loop.second, data);
-        }
-    } else {
-        for (let item of field) {
-            let copy = loop.first.slice();
-            while (copy.length) {
-                template.handleNextToken(e, copy, item);
-            }
-        }
-    }
-});
-
 interface Block {
     /** The tokens appearing between delimiters, before the {{else}} */
     first: Token[];
@@ -242,6 +224,7 @@ function collectBlock(tokens: Token[], name: string): Block {
                 depth++;
             } else if (token.field === 'else' && depth === 1) {
                 block = result.second;
+                continue;
             }
         }
 
@@ -261,6 +244,23 @@ Template.registerHelper('with', (element, template, tokens, data) => {
     }
 });
 
+function cloneTokens(tokens: Token[]): Token[] {
+    let clone = [];
+    for (let token of tokens) {
+        if (isNode(token)) {
+            clone.push({
+                type: 'node',
+                data: token.data,
+                node: token.node.cloneNode(true)
+            });
+        } else {
+            clone.push(token);
+        }
+    }
+    
+    return clone;
+}
+
 Template.registerHelper('if', (element, template, tokens, data) => {
     let ifToken = (<FieldToken>tokens.shift());
     let result = resolvePath(data, ifToken.field.substr('#if '.length));
@@ -269,18 +269,36 @@ Template.registerHelper('if', (element, template, tokens, data) => {
     while (branch.length) {
         template.handleNextToken(element, branch, data);
     }
+});
 
+Template.registerHelper('each', (e, template, ts, data) => {
+    let t = (<FieldToken>ts.shift());
+    let loop = collectBlock(ts, 'each');
+    let field = resolvePath(data, t.field.substr('#each '.length));
+    if (!isArrayLike(field)) {
+        while (loop.second.length) {
+            template.handleNextToken(e, loop.second, data);
+        }
+    } else {
+        for (let item of field) {
+            let copy = cloneTokens(loop.first);
+            while (copy.length) {
+                template.handleNextToken(e, copy, item);
+            }
+        }
+    }
 });
 
 let blurb = new Template($('#blurb').html());
 $('body').append(blurb.render({
-    test: true,
-    nested: {
-        foo: {
-            names: [
-                { name: "Bob" },
-                { name: "Ken" }
-            ]
+    people: [
+        {
+            name: 'Bob',
+            hobbies: 'running hiking swimming'.split(' ')
+        },
+        {
+            name: 'Ken',
+            hobbies: 'shoryuken hadouken'.split(' ')
         }
-    }
+    ]
 }));

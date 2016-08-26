@@ -122,21 +122,28 @@ class Template {
         let tokens = [];
         for (let node of nodes) {
             if (node.nodeType === Node.TEXT_NODE) {
-                let re = /(.*?){{(.+?)}}/ig;
+                let re = /(.*?){{(.+?)}}|(.+)/ig;
                 let text = node.textContent;
                 let results = [];
                 while (results = re.exec(text)) {
                     text = text.substr(re.lastIndex);
                     re.lastIndex = 0;
-                    tokens.push({
-                        type: 'text',
-                        text: results[1]
-                    });
-                    tokens.push({
-                        type: 'field',
-                        field: results[2],
-                        data: data
-                    });
+                    if (results[3]) {
+                        tokens.push({
+                            type: 'text',
+                            text: results[3]
+                        });
+                    } else {
+                        tokens.push({
+                            type: 'text',
+                            text: results[1]
+                        });
+                        tokens.push({
+                            type: 'field',
+                            field: results[2],
+                            data: data
+                        });
+                    }
                 }
 
                 tokens.push({
@@ -178,6 +185,7 @@ class Template {
 }
 
 Template.registerHelper('each', (e, template, ts, data) => {
+    // TODO else block
     let loopedTokens = [];
     let t = ts.shift();
     while (true) {
@@ -235,8 +243,47 @@ Template.registerHelper('with', (element, template, tokens, data) => {
     }
 });
 
+Template.registerHelper('if', (element, template, tokens, data) => {
+    let ifToken = tokens.shift();
+    let result = data;
+    for (let name of ifToken.field.substr('#if '.length).split('.')) {
+        if (result == null) break;
+        result = result[name];
+    }
+
+    let trueBranch = [];
+    let elseBranch = [];
+    while (tokens.length) {
+        let token = tokens.shift();
+        if (token.type === 'field') {
+            if (token.field === '/if') {
+                break;
+            } else if (token.field === 'else') {
+                while (tokens.length) {
+                    let token = tokens.shift();
+                    if (token.type === 'field' && token.field === '/if') {
+                        break;
+                    }
+
+                    elseBranch.push(token);
+                }
+                break;
+            }
+        }
+
+        trueBranch.push(token);
+    }
+
+    let branch = result ? trueBranch : elseBranch;
+    while (branch.length) {
+        template.handleNextToken(element, branch, data);
+    }
+
+});
+
 let blurb = new Template($('#blurb').html());
 $('body').append(blurb.render({
+    test: true,
     nested: {
         names: [
             { name: "Bob" },

@@ -27,7 +27,7 @@ interface HelperEntry {
 }
 
 function resolvePath(data: {}, path: string) {
-    for (let name of path) {
+    for (let name of path.split('.')) {
         if (data == null) break;
         data = data[name];
     }
@@ -213,15 +213,21 @@ Template.registerHelper('each', (e, template, ts, data) => {
 });
 
 Template.registerHelper('with', (element, template, tokens, data) => {
-    // TODO nested 'with' invocations
     let withToken = tokens.shift();
     let newContext = resolvePath(data, withToken.field.substr('#with '.length));
     let block = [];
+    let depth = 1;
     
     while (tokens.length) {
         let token = tokens.shift();
-        if (token.type === 'field' && token.field === '/with') {
-            break;
+        if (token.type === 'field') {
+            if (token.field === '/with') {
+                if (--depth === 0) {
+                    break;
+                }
+            } else if (0 === token.field.indexOf('#with')) {
+                depth++;
+            }
         }
 
         block.push(token);
@@ -270,9 +276,11 @@ let blurb = new Template($('#blurb').html());
 $('body').append(blurb.render({
     test: true,
     nested: {
-        names: [
-            { name: "Bob" },
-            { name: "Ken" }
-        ]
+        foo: {
+            names: [
+                { name: "Bob" },
+                { name: "Ken" }
+            ]
+        }
     }
 }));

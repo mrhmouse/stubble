@@ -185,92 +185,77 @@ class Template {
 }
 
 Template.registerHelper('each', (e, template, ts, data) => {
-    // TODO else block
     let t = ts.shift();
-    let loopedTokens = collectBlock(ts, {
-        startPrefix: '#each',
-        end: '/each'
-    });
-    
+    let loop = collectBlock(ts, 'each');
     let field = resolvePath(data, t.field.substr('#each '.length));
-    if (field == null) return;
-    
-    if (field.length === undefined) {
-        field = [field];
-    }
-
-    for (let item of field) {
-        let copy = loopedTokens.slice();
-        while (copy.length) {
-            template.handleNextToken(e, copy, item);
+    if (field == null || !field.length) {
+        while (loop.second.length) {
+            template.handleNextToken(e, loop.second, data);
+        }
+    } else {
+        for (let item of field) {
+            let copy = loop.first.slice();
+            while (copy.length) {
+                template.handleNextToken(e, copy, item);
+            }
         }
     }
 });
 
-function collectBlock(
-    tokens: Token[],
-    opts: { startPrefix: string, end: string })
-: Token[]
-{
-    let block = [];
+interface Block {
+    /** The tokens appearing between delimiters, before the {{else}} */
+    first: Token[];
+
+    /** The tokens after the {{else}} */
+    second: Token[];
+}
+
+function collectBlock(tokens: Token[], name: string): Token[] {
+    let result = {
+        first: [],
+        second: []
+    };
+    
     let depth = 1;
+    let block = result.first;
+    let start = '#' + name;
+    let end = '/' + name;
+    
     while (tokens.length) {
+        let token = tokens.shift();
         if (token.type === 'field') {
-            if (token.field === opts.end) {
+            if (token.field === end) {
                 if (--depth === 0) {
                     break;
                 }
-            } else if (0 === token.field.indexOf(opts.startPrefix)) {
+            } else if (0 === token.field.indexOf(start)) {
                 depth++;
+            } else if (token.field === 'else' && depth === 1) {
+                block = result.second;
             }
         }
 
         block.push(token);
     }
 
-    return block;
+    return result;
 }
 
 Template.registerHelper('with', (element, template, tokens, data) => {
     let withToken = tokens.shift();
     let newContext = resolvePath(data, withToken.field.substr('#with '.length));
-    let block = collectBlock(tokens, {
-        startPrefix: '#with',
-        end: '/with'
-    });
-    while (block.length) {
-        template.handleNextToken(element, block, newContext);
+    let block = collectBlock(tokens, 'with');
+    let choice = newContext ? block.first : block.second;
+    while (choice.length) {
+        template.handleNextToken(element, choice, newContext);
     }
 });
 
 Template.registerHelper('if', (element, template, tokens, data) => {
     let ifToken = tokens.shift();
     let result = resolvePath(data, ifToken.field.substr('#if '.length));
-    let trueBranch = [];
-    let elseBranch = [];
-    
-    while (tokens.length) {
-        let token = tokens.shift();
-        if (token.type === 'field') {
-            if (token.field === '/if') {
-                break;
-            } else if (token.field === 'else') {
-                while (tokens.length) {
-                    let token = tokens.shift();
-                    if (token.type === 'field' && token.field === '/if') {
-                        break;
-                    }
-
-                    elseBranch.push(token);
-                }
-                break;
-            }
-        }
-
-        trueBranch.push(token);
-    }
-
-    let branch = result ? trueBranch : elseBranch;
+    let block = collectBlock(tokens, 'if');
+    let branch = result ? block.first : block.second;
     while (branch.length) {
         template.handleNextToken(element, branch, data);
     }

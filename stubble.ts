@@ -17,8 +17,18 @@ interface FieldToken {
     data: {};
 }
 
+interface Helper {
+    (e: Element, token: Token, tokens: Token[]): void;
+}
+
+interface HelperEntry {
+    name: string;
+    helper: Helper;
+}
+
 class Template {
     private element: JQuery;
+    private static helpers: HelperEntry[] = [];
 
     constructor(template: string) {
         this.element = $(template);
@@ -31,6 +41,24 @@ class Template {
         });
 
         return result;
+    }
+
+    static registerHelper(name: string, helper: Helper) {
+        Template.helpers.unshift({
+            name: name,
+            helper: helper
+        });
+    }
+
+    private static findHelper(name: string): Helper {
+        let firstWord = name.split(' ')[0];
+        for (let entry of Template.helpers) {
+            if (entry.name === firstWord) {
+                return entry.helper;
+            }
+        }
+
+        return null;
     }
 
     private resolve(e: Element, data: {}) {
@@ -59,19 +87,25 @@ class Template {
             break;
             
         case 'field':
-            // TODO helpers
-            let field = token.data;
-            for (let name of token.field.split('.')) {
-                if (field == null) break;
-                field = field[name];
-            }
+            if (token.field[0] === '#') {
+                let helper = Template.findHelper(token.field.substr(1));
+                if (helper) {
+                    helper(e, token, tokens);
+                }
+            } else {
+                let field = token.data;
+                for (let name of token.field.split('.')) {
+                    if (field == null) break;
+                    field = field[name];
+                }
 
-            if (field instanceof Node) {
-                e.appendChild(field);
-            } else if (field instanceof $) {
-                field.appendTo(e);
-            } else if (field != null) {
-                e.appendChild(document.createTextNode(field.toString()));
+                if (field instanceof Node) {
+                    e.appendChild(field);
+                } else if (field instanceof $) {
+                    field.appendTo(e);
+                } else if (field != null) {
+                    e.appendChild(document.createTextNode(field.toString()));
+                }
             }
             break;
             
@@ -87,11 +121,12 @@ class Template {
         let tokens = [];
         for (let node of nodes) {
             if (node.nodeType === Node.TEXT_NODE) {
-                let re = /(.*?){{(\S+)}}/ig;
+                let re = /(.*?){{(.+?)}}/ig;
                 let text = node.textContent;
                 let results = [];
                 while (results = re.exec(text)) {
                     text = text.substr(re.lastIndex);
+                    re.lastIndex = 0;
                     tokens.push({
                         type: 'text',
                         text: results[1]
@@ -120,7 +155,8 @@ class Template {
     }
 
     private resolveAttributes(e: Element, data: {}) {
-        for (let attr of e.attributes) {
+        let attributes = Array.prototype.slice.call(e.attributes);
+        for (let attr of attributes) {
             e.setAttribute(
                 attr.name,
                 Template.replaceText(e.getAttribute(attr.name), data));
@@ -139,6 +175,10 @@ class Template {
         });
     }
 }
+
+Template.registerHelper('foo', (e, t, ts) => {
+    e.appendChild(document.createTextNode('FOOOOO'));
+});
 
 let blurb = new Template($('#blurb').html());
 $('body').append(blurb.render({

@@ -1,35 +1,37 @@
-type Token = TextToken | NodeToken | FieldToken;
+import $ = require('jquery');
 
-interface TextToken {
+export type Token = TextToken | NodeToken | FieldToken;
+
+export interface TextToken {
     type: 'text';
     text: string;
 }
 
-function isText(t: Token): t is TextToken {
+export function isText(t: Token): t is TextToken {
     return t.type === 'text';
 }
 
-interface NodeToken {
+export interface NodeToken {
     type: 'node';
     node: Node;
     data: {};
 }
 
-function isNode(t: Token): t is NodeToken {
+export function isNode(t: Token): t is NodeToken {
     return t.type === 'node';
 }
 
-interface FieldToken {
+export interface FieldToken {
     type: 'field';
     field: string;
     data: {};
 }
 
-function isField(t: Token): t is FieldToken {
+export function isField(t: Token): t is FieldToken {
     return t.type === 'field';
 }
 
-interface Helper {
+export interface Helper {
     (e: Node, template: Template, tokens: Token[], data: {}): void;
 }
 
@@ -38,7 +40,7 @@ interface HelperEntry {
     helper: Helper;
 }
 
-function resolvePath(data: {}, path: string) {
+export function resolvePath(data: {}, path: string) {
     for (let name of path.split('.')) {
         if (data == null) break;
         data = data[name];
@@ -47,7 +49,7 @@ function resolvePath(data: {}, path: string) {
     return data;
 }
 
-class Template {
+export class Template {
     private element: JQuery;
     private static helpers: HelperEntry[] = [];
 
@@ -115,8 +117,8 @@ class Template {
                 let field = resolvePath(data, token.field);
                 if (field instanceof Node) {
                     e.appendChild(field);
-                } else if (field instanceof $) {
-                    field.appendTo(e);
+                } else if (isJQuery(field)) {
+                    $(e).append(field);
                 } else if (field != null) {
                     e.appendChild(document.createTextNode(field.toString()));
                 }
@@ -190,11 +192,11 @@ class Template {
     }
 }
 
-function isArrayLike(x: any): x is any[] {
+function hasLength(x: any): x is any[] {
     return x != null && x.length;
 }
 
-interface Block {
+export interface Block {
     /** The tokens appearing between delimiters, before the {{else}} */
     first: Token[];
 
@@ -202,25 +204,23 @@ interface Block {
     second: Token[];
 }
 
-function collectBlock(tokens: Token[], name: string): Block {
+export function collectBlock(tokens: Token[]): Block {
     let result = {
         first: [],
         second: []
     };
-    
+
     let depth = 1;
     let block = result.first;
-    let start = '#' + name;
-    let end = '/' + name;
-    
+
     while (tokens.length) {
         let token = tokens.shift();
         if (isField(token)) {
-            if (token.field === end) {
+            if (token.field[0] === '/') {
                 if (--depth === 0) {
                     break;
                 }
-            } else if (0 === token.field.indexOf(start)) {
+            } else if (token.field[0] === '#') {
                 depth++;
             } else if (token.field === 'else' && depth === 1) {
                 block = result.second;
@@ -234,17 +234,7 @@ function collectBlock(tokens: Token[], name: string): Block {
     return result;
 }
 
-Template.registerHelper('with', (element, template, tokens, data) => {
-    let withToken = (<FieldToken>tokens.shift());
-    let newContext = resolvePath(data, withToken.field.substr('#with '.length));
-    let block = collectBlock(tokens, 'with');
-    let choice = newContext ? block.first : block.second;
-    while (choice.length) {
-        template.handleNextToken(element, choice, newContext);
-    }
-});
-
-function cloneTokens(tokens: Token[]): Token[] {
+export function cloneTokens(tokens: Token[]): Token[] {
     let clone = [];
     for (let token of tokens) {
         if (isNode(token)) {
@@ -257,48 +247,48 @@ function cloneTokens(tokens: Token[]): Token[] {
             clone.push(token);
         }
     }
-    
+
     return clone;
 }
+
+Template.registerHelper('with', (element, template, tokens, data) => {
+    let withToken = (<FieldToken>tokens.shift());
+    let newContext = resolvePath(data, withToken.field.substr('#with '.length));
+    let block = collectBlock(tokens);
+    let choice = newContext ? block.first : block.second;
+    while (choice.length) {
+        template.handleNextToken(element, choice, newContext);
+    }
+});
 
 Template.registerHelper('if', (element, template, tokens, data) => {
     let ifToken = (<FieldToken>tokens.shift());
     let result = resolvePath(data, ifToken.field.substr('#if '.length));
-    let block = collectBlock(tokens, 'if');
+    let block = collectBlock(tokens);
     let branch = result ? block.first : block.second;
     while (branch.length) {
         template.handleNextToken(element, branch, data);
     }
 });
 
-Template.registerHelper('each', (e, template, ts, data) => {
-    let t = (<FieldToken>ts.shift());
-    let loop = collectBlock(ts, 'each');
-    let field = resolvePath(data, t.field.substr('#each '.length));
-    if (!isArrayLike(field)) {
-        while (loop.second.length) {
-            template.handleNextToken(e, loop.second, data);
-        }
-    } else {
+Template.registerHelper('each', (element, template, tokens, data) => {
+    let token = (<FieldToken>tokens.shift());
+    let loop = collectBlock(tokens);
+    let field = resolvePath(data, token.field.substr('#each '.length));
+    if (hasLength(field)) {
         for (let item of field) {
             let copy = cloneTokens(loop.first);
             while (copy.length) {
-                template.handleNextToken(e, copy, item);
+                template.handleNextToken(element, copy, item);
             }
+        }
+    } else {
+        while (loop.second.length) {
+            template.handleNextToken(element, loop.second, data);
         }
     }
 });
 
-let blurb = new Template($('#blurb').html());
-$('body').append(blurb.render({
-    people: [
-        {
-            name: 'Bob',
-            hobbies: 'running hiking swimming'.split(' ')
-        },
-        {
-            name: 'Ken',
-            hobbies: 'shoryuken hadouken'.split(' ')
-        }
-    ]
-}));
+function isJQuery(x: any): x is JQuery {
+    return x instanceof $;
+}

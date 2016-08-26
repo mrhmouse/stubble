@@ -18,7 +18,7 @@ interface FieldToken {
 }
 
 interface Helper {
-    (e: Element, token: Token, tokens: Token[]): void;
+    (e: Element, template: Template, tokens: Token[], data: {}): void;
 }
 
 interface HelperEntry {
@@ -50,7 +50,7 @@ class Template {
         });
     }
 
-    private static findHelper(name: string): Helper {
+    static findHelper(name: string): Helper {
         let firstWord = name.split(' ')[0];
         for (let entry of Template.helpers) {
             if (entry.name === firstWord) {
@@ -61,7 +61,7 @@ class Template {
         return null;
     }
 
-    private resolve(e: Element, data: {}) {
+    resolve(e: Element, data: {}) {
         if (e.attributes && e.attributes.length) {
             this.resolveAttributes(e, data);
         }
@@ -69,17 +69,17 @@ class Template {
         let tokens = this.parse(e, data);
         Template.clearNode(e);
         while (tokens.length) {
-            this.handleNextToken(e, tokens);
+            this.handleNextToken(e, tokens, data);
         }
     }
 
-    private static clearNode(e: Node) {
+    static clearNode(e: Node) {
         while (e.childNodes.length) {
             e.removeChild(e.childNodes[0]);
         }
     }
 
-    private handleNextToken(e: Element, tokens: Token[]) {
+    handleNextToken(e: Element, tokens: Token[], data: {}) {
         let token = tokens.shift();
         switch (token.type) {
         case 'text':
@@ -90,10 +90,11 @@ class Template {
             if (token.field[0] === '#') {
                 let helper = Template.findHelper(token.field.substr(1));
                 if (helper) {
-                    helper(e, token, tokens);
+                    tokens.unshift(token);
+                    helper(e, this, tokens, data);
                 }
             } else {
-                let field = token.data;
+                let field = data;
                 for (let name of token.field.split('.')) {
                     if (field == null) break;
                     field = field[name];
@@ -111,12 +112,12 @@ class Template {
             
         case 'node':
             e.appendChild(token.node);
-            this.resolve(token.node, token.data);
+            this.resolve(token.node, data);
             break;
         }
     }
 
-    private parse(e: Element, data: {}): Token[] {
+    parse(e: Element, data: {}): Token[] {
         let nodes = Array.prototype.slice.call(e.childNodes);
         let tokens = [];
         for (let node of nodes) {
@@ -154,7 +155,7 @@ class Template {
         return tokens;
     }
 
-    private resolveAttributes(e: Element, data: {}) {
+    resolveAttributes(e: Element, data: {}) {
         let attributes = Array.prototype.slice.call(e.attributes);
         for (let attr of attributes) {
             e.setAttribute(
@@ -176,14 +177,43 @@ class Template {
     }
 }
 
-Template.registerHelper('foo', (e, t, ts) => {
-    e.appendChild(document.createTextNode('FOOOOO'));
+Template.registerHelper('each', (e, template, ts, data) => {
+    let loopedTokens = [];
+    let t = ts.shift();
+    while (true) {
+        let token = ts.shift();
+        if (token.type === 'field' && token.field === '/each') {
+            break;
+        }
+
+        loopedTokens.push(token);
+    }
+    
+    let fieldName = t.field.substr('#each '.length);
+    let field = data;
+    for (let name of fieldName.split('.')) {
+        if (field == null) break;
+        field = field[name];
+    }
+
+    if (field == null) return;
+    
+    if (field.length === undefined) {
+        field = [field];
+    }
+
+    for (let item of field) {
+        let copy = loopedTokens.slice();
+        while (copy.length) {
+            template.handleNextToken(e, copy, item);
+        }
+    }
 });
 
 let blurb = new Template($('#blurb').html());
 $('body').append(blurb.render({
-    color: 'red',
-    header: 'test',
-    blurb: 'I\'m <b>escaped</b>',
-    otherBlurb: $($('#other').html())
+    names: [
+        { name: "Bob" },
+        { name: "Ken" }
+    ]
 }));

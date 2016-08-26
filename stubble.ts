@@ -210,10 +210,37 @@ Template.registerHelper('each', (e, template, ts, data) => {
     }
 });
 
+Template.registerHelper('with', (element, template, tokens, data) => {
+    // TODO nested 'with' invocations
+    let newContext = data;
+    let withToken = tokens.shift();
+    
+    for (let name of withToken.field.substr('#with '.length).split('.')) {
+        if (newContext == null) break;
+        newContext = newContext[name];
+    }
+
+    let block = [];
+    while (tokens.length) {
+        let token = tokens.shift();
+        if (token.type === 'field' && token.field === '/with') {
+            break;
+        }
+
+        block.push(token);
+    }
+
+    while (block.length) {
+        template.handleNextToken(element, block, newContext);
+    }
+});
+
 let blurb = new Template($('#blurb').html());
 $('body').append(blurb.render({
-    names: [
-        { name: "Bob" },
-        { name: "Ken" }
-    ]
+    nested: {
+        names: [
+            { name: "Bob" },
+            { name: "Ken" }
+        ]
+    }
 }));

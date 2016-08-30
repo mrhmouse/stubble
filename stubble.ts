@@ -113,7 +113,7 @@ export class Template {
 	}
 
 	private static parse(templateContainer: Node): Token[] {
-		let nodes = slice<Node>(templateContainer.childNodes);
+		let nodes = slice(templateContainer.childNodes);
 		if (templateContainer.nodeType === Node.TEXT_NODE) {
 			nodes = [templateContainer];
 		}
@@ -148,7 +148,7 @@ export class Template {
 
 	private static resolveAttributes(e: Node, data: {}) {
 		if (e instanceof Element && e.attributes.length) {
-			let attributes = slice<Attr>(e.attributes);
+			let attributes = slice(e.attributes);
 			for (let attr of attributes) {
 				let value = e.getAttribute(attr.name);
 				value = replaceText(value, data);
@@ -197,7 +197,7 @@ function shallowClone(e: Node): Node {
 	}
 
 	let clone = document.createElement(e.nodeName);
-	for (let attr of slice<Attr>(e.attributes)) {
+	for (let attr of slice(e.attributes)) {
 		clone.setAttribute(attr.name, attr.value);
 	}
 
@@ -366,6 +366,11 @@ function isJQuery(x: any): x is JQuery {
 	return x instanceof $;
 }
 
-function slice<T>(x: any): T[] {
+interface ArrayLike<T> {
+	[index: number]: T;
+	length: number;
+}
+
+function slice<T>(x: ArrayLike<T>): T[] {
 	return Array.prototype.slice.call(x);
 }

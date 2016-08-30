@@ -3,14 +3,14 @@ import $ = require('jquery');
 /**
  * A Mustache-like template for the DOM.
  * Differences from Mustache:
- * - Uses two curl brackets for all placeholders
+ * - Uses two curly brackets for all placeholders
  * - Raw content is inserted by passing a Node or JQuery object
  * - No implicit 'each' helper - you must specify the helper you
  *   want to call, e.g. {{#each items}}, not {{#items}}
  * - No path traversal via '..', e.g. {{../foo}} will not work
  */
 export class Template {
-	private nodes: Node[];
+	private tokens: Token[];
 	private static helpers: Helper[] = [];
 
 	/**
@@ -22,7 +22,7 @@ export class Template {
 	constructor(template: string) {
 		let temp = document.createElement('div');
 		temp.innerHTML = template;
-		this.nodes = slice<Node>(temp.childNodes);
+		this.tokens = Template.parse(temp);
 	}
 
 	/**
@@ -54,70 +54,68 @@ export class Template {
 	 * @param data Any data to pass to the template.
 	 */
 	render(data: {}): JQuery {
+		let tokens = cloneTokens(this.tokens);
 		let result = document.createElement('div');
-		for (let node of this.nodes) {
-			result.appendChild(node.cloneNode(true));
-		}
+		this.consumeTokens(result, tokens, data);
 
-		this.resolve(result, data);
 		return $(result).contents();
 	}
 
 	/**
-	 * ADVANCED: Pop the next token from the token stream and handle it.
-	 * @param e The current element, where token data is appended.
-	 * @param tokens The token stream. This may be modified.
+	 * ADVANCED: Pop all tokens from the token stream and handle them.
+	 * @param target The element where token data is appended.
+	 * @param tokens The token stream. This will be consumed.
 	 * @param data Any data to pass to tokens (from the 'render' call)
 	 */
-	handleNextToken(e: Node, tokens: Token[], data: {}) {
-		let token = tokens.shift();
-		if (isText(token)) {
-			this.handleText(e, token);
-		} else if (isField(token)) {
-			this.handleField(e, token, tokens, data);
-		} else if (isNode(token)) {
-			this.handleNode(e, token, data);
-		}
-	}
-
-	private resolve(e: Node, data: {}) {
-		if (e instanceof Element && e.attributes.length) {
-			Template.resolveAttributes(e, data);
-		}
-
-		let tokens = Template.parse(e, data);
-		clearNode(e);
+	consumeTokens(target: Node, tokens: Token[], data: {}) {
 		while (tokens.length) {
-			this.handleNextToken(e, tokens, data);
+			let token = tokens.shift();
+			if (isText(token)) {
+				this.handleText(target, token);
+			} else if (isField(token)) {
+				this.handleField(target, token, tokens, data);
+			} else if (isNode(token)) {
+				this.handleNode(target, token, data);
+			}
 		}
 	}
 
-	private handleNode(e: Node, token: NodeToken, data: {}) {
-		e.appendChild(token.node);
-		this.resolve(token.node, data);
+	private handleNode(target: Node, token: NodeToken, data: {}) {
+		if (!token.node) {
+			return;
+		}
+
+		target.appendChild(token.node);
+		Template.resolveAttributes(token.node, data);
+		this.consumeTokens(token.node, token.tokens, data);
 	}
 
-	private handleField(e: Node, token: FieldToken, tokens: Token[], data: {}) {
-		if (token.field[0] === '#') {
-			let helper = Template.findHelper(token.field.substr(1));
+	private handleField(
+		target: Node,
+		fieldToken: FieldToken,
+		tokens: Token[],
+		data: {})
+	{
+		if (fieldToken.field[0] === '#') {
+			let helper = Template.findHelper(fieldToken.field.substr(1));
 			if (helper) {
-				let block = new Block(token, tokens);
-				helper.run(e, this, block, data);
+				let block = new Block(fieldToken, tokens);
+				helper.run(target, this, block, data);
 			}
 		} else {
-			let field = resolvePath(data, token.field);
-			append(e, field);
+			let field = resolvePath(data, fieldToken.field);
+			append(target, field);
 		}
 	}
 
-	private handleText(e: Node, token: TextToken) {
-		append(e, token.text);
+	private handleText(target: Node, token: TextToken) {
+		append(target, token.text);
 	}
 
-	private static parse(e: Node, data: {}): Token[] {
-		let nodes = slice<Node>(e.childNodes);
-		if (e.nodeType === Node.TEXT_NODE) {
-			nodes = [e];
+	private static parse(templateContainer: Node): Token[] {
+		let nodes = slice<Node>(templateContainer.childNodes);
+		if (templateContainer.nodeType === Node.TEXT_NODE) {
+			nodes = [templateContainer];
 		}
 
 		let tokens = [];
@@ -131,48 +129,36 @@ export class Template {
 					text = text.substr(re.lastIndex);
 					re.lastIndex = 0;
 					if (results[3]) {
-						tokens.push({
-							type: 'text',
-							text: results[3]
-						});
+						tokens.push({ type: 'text', text: results[3] });
 					} else {
-						tokens.push({
-							type: 'text',
-							text: results[1]
-						});
-						tokens.push({
-							type: 'field',
-							field: results[2],
-							data: data
-						});
+						tokens.push({ type: 'text', text: results[1] });
+						tokens.push({ type: 'field', field: results[2] });
 					}
 				}
 
-				tokens.push({
-					type: 'text',
-					text: text
-				});
+				tokens.push({ type: 'text', text: text });
 			} else {
-				tokens.push({
-					type: 'node',
-					node: node,
-					data: data
-				});
+				let parsed = Template.parse(node);
+				tokens.push({ type: 'node', node: node, tokens: parsed });
 			}
 		}
 
 		return tokens;
 	}
 
-	private static resolveAttributes(e: Element, data: {}) {
-		let attributes = slice<Attr>(e.attributes);
-		for (let attr of attributes) {
-			e.setAttribute(attr.name, replaceText(e.getAttribute(attr.name), data));
+	private static resolveAttributes(e: Node, data: {}) {
+		if (e instanceof Element && e.attributes.length) {
+			let attributes = slice<Attr>(e.attributes);
+			for (let attr of attributes) {
+				let value = e.getAttribute(attr.name);
+				value = replaceText(value, data);
+				e.setAttribute(attr.name, value);
+			}
 		}
 	}
 }
 
-function append(e: Node, content: any) {
+function append(target: Node, content: any) {
 	let node: Node = null;
 	if (content instanceof Node) {
 		node = content;
@@ -182,13 +168,7 @@ function append(e: Node, content: any) {
 		node = document.createTextNode(content.toString());
 	}
 
-	if (e.nodeType === Node.TEXT_NODE) {
-		if (e.parentNode) {
-			e.parentNode.replaceChild(node, e);
-		}
-	} else {
-		e.appendChild(node);
-	}
+	target.appendChild(node);
 }
 
 /**
@@ -205,13 +185,23 @@ function replaceText(template: string, data: {}): string {
 }
 
 /**
- * Remove all children from the given node.
- * @param e The node to empty.
+ * Make a shallow clone of the given node, including its attributes
+ * but not its child nodes.
+ * @param e The node to clone.
  */
-function clearNode(e: Node) {
-	while (e.childNodes.length) {
-		e.removeChild(e.childNodes[0]);
+function shallowClone(e: Node): Node {
+	if (e.nodeType === Node.TEXT_NODE) {
+		return document.createTextNode(e.textContent);
+	} else if (e.nodeType !== Node.ELEMENT_NODE) {
+		return null;
 	}
+
+	let clone = document.createElement(e.nodeName);
+	for (let attr of slice<Attr>(e.attributes)) {
+		clone.setAttribute(attr.name, attr.value);
+	}
+
+	return clone;
 }
 
 /**
@@ -248,7 +238,7 @@ export function isText(t: Token): t is TextToken {
 export interface NodeToken {
 	type: 'node';
 	node: Node;
-	data: {};
+	tokens: Token[];
 }
 
 export function isNode(t: Token): t is NodeToken {
@@ -258,7 +248,6 @@ export function isNode(t: Token): t is NodeToken {
 export interface FieldToken {
 	type: 'field';
 	field: string;
-	data: {};
 }
 
 export function isField(t: Token): t is FieldToken {
@@ -325,8 +314,8 @@ export function cloneTokens(tokens: Token[]): Token[] {
 		if (isNode(token)) {
 			clone.push({
 				type: 'node',
-				data: token.data,
-				node: token.node.cloneNode(true)
+				node: shallowClone(token.node),
+				tokens: cloneTokens(token.tokens)
 			});
 		} else {
 			clone.push(token);
@@ -341,9 +330,7 @@ Template.registerHelper({
 	run: function (element, template, block, data) {
 		let newContext = resolvePath(data, block.arg);
 		let choice = newContext ? block.first : block.second;
-		while (choice.length) {
-			template.handleNextToken(element, choice, newContext);
-		}
+		template.consumeTokens(element, choice, newContext);
 	}
 });
 
@@ -352,9 +339,7 @@ Template.registerHelper({
 	run: function (element, template, block, data) {
 		let result = resolvePath(data, block.arg);
 		let branch = result ? block.first : block.second;
-		while (branch.length) {
-			template.handleNextToken(element, branch, data);
-		}
+		template.consumeTokens(element, branch, data);
 	}
 });
 
@@ -365,14 +350,10 @@ Template.registerHelper({
 		if (hasLength(field)) {
 			for (let item of field) {
 				let copy = cloneTokens(block.first);
-				while (copy.length) {
-					template.handleNextToken(element, copy, item);
-				}
+				template.consumeTokens(element, copy, item);
 			}
 		} else {
-			while (block.second.length) {
-				template.handleNextToken(element, block.second, data);
-			}
+			template.consumeTokens(element, block.second, data);
 		}
 	}
 });

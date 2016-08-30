@@ -54,15 +54,13 @@ export class Template {
 	 * @param data Any data to pass to the template.
 	 */
 	render(data: {}): JQuery {
-		let result = $('<div>');
+		let result = document.createElement('div');
 		for (let node of this.nodes) {
-			let child = node.cloneNode(true);
-			this.resolve(child, data);
-			result.append($(child));
+			result.appendChild(node.cloneNode(true));
 		}
 
-		result = result.contents();
-		return result;
+		this.resolve(result, data);
+		return $(result).contents();
 	}
 
 	/**
@@ -108,22 +106,20 @@ export class Template {
 			}
 		} else {
 			let field = resolvePath(data, token.field);
-			if (field instanceof Node) {
-				e.appendChild(field);
-			} else if (isJQuery(field)) {
-				$(e).append(field);
-			} else if (field != null) {
-				e.appendChild(document.createTextNode(field.toString()));
-			}
+			append(e, field);
 		}
 	}
 
 	private handleText(e: Node, token: TextToken) {
-		e.appendChild(document.createTextNode(token.text));
+		append(e, token.text);
 	}
 
 	private static parse(e: Node, data: {}): Token[] {
 		let nodes = slice<Node>(e.childNodes);
+		if (e.nodeType === Node.TEXT_NODE) {
+			nodes = [e];
+		}
+
 		let tokens = [];
 
 		for (let node of nodes) {
@@ -173,6 +169,25 @@ export class Template {
 		for (let attr of attributes) {
 			e.setAttribute(attr.name, replaceText(e.getAttribute(attr.name), data));
 		}
+	}
+}
+
+function append(e: Node, content: any) {
+	let node: Node = null;
+	if (content instanceof Node) {
+		node = content;
+	} else if (isJQuery(content)) {
+		node = content[0];
+	} else if (content != null) {
+		node = document.createTextNode(content.toString());
+	}
+
+	if (e.nodeType === Node.TEXT_NODE) {
+		if (e.parentNode) {
+			e.parentNode.replaceChild(node, e);
+		}
+	} else {
+		e.appendChild(node);
 	}
 }
 

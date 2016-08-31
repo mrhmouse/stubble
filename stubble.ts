@@ -169,7 +169,7 @@ export class BlockStartToken {
     constructor(text: string) {
 	let split = text.split(' ');
 	this.name = split[0].substr(1);
-	this.path = split[1].split('.');
+	this.path = (split[1] || '').split('.');
     }
 }
 

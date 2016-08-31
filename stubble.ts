@@ -1,376 +1,556 @@
 import $ = require('jquery');
 
 /**
- * A Mustache-like template for the DOM.
- * Differences from Mustache:
- * - Uses two curly brackets for all placeholders
- * - Raw content is inserted by passing a Node or JQuery object
- * - No implicit 'each' helper - you must specify the helper you
- *   want to call, e.g. {{#each items}}, not {{#items}}
- * - No path traversal via '..', e.g. {{../foo}} will not work
+ * A templating engine for the DOM, with syntax
+ * loosely inspired by Mustache.
  */
 export class Template {
-	private tokens: Token[];
-	private static helpers: Helper[] = [];
+    static helpers: HashMap<Helper> = {};
+    private recipes: Recipe[];
 
-	/**
-	 * Create a new template from string content.
-	 * @param template The string content of the template.
-	 * This is parsed by the browser as HTML, so top-level
-	 * bare strings will not work (they must be wrapped in a tag).
-	 */
-	constructor(template: string) {
-		let temp = document.createElement('div');
-		temp.innerHTML = template;
-		this.tokens = Template.parse(temp);
+    constructor(template: string) {
+	let tokens = parseTokens(template);
+	let recipes = tokensToRecipes(tokens);
+	this.recipes = optimizeRecipes(recipes);
+    }
+
+    /**
+     * Render this template to a JQuery collection.
+     * @param data Data used to resolve placeholders in the template.
+     */
+    render(data: {}) {
+	let target = document.createElement('div');
+	for (let recipe of this.recipes) {
+	    recipe.renderInto(target, data);
 	}
 
-	/**
-	 * ADVANCED: Register a helper for use in further templates.
-	 * Helpers are invoked via block syntax, e.g. {{#foo}}{{/foo}}
-	 * @param helper The helper itself.
-	 */
-	static registerHelper(helper: Helper) {
-		Template.helpers.unshift(helper);
-	}
-
-	/**
-	 * ADVANCED: Look up a helper by name.
-	 * @param name The name of the helper.
-	 */
-	static findHelper(name: string): Helper {
-		let firstWord = name.split(' ')[0];
-		for (let entry of Template.helpers) {
-			if (entry.name === firstWord) {
-				return entry;
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Render this template to a JQuery collection.
-	 * @param data Any data to pass to the template.
-	 */
-	render(data: {}): JQuery {
-		let tokens = cloneTokens(this.tokens);
-		let result = document.createElement('div');
-		this.consumeTokens(result, tokens, data);
-
-		return $(result).contents();
-	}
-
-	/**
-	 * ADVANCED: Pop all tokens from the token stream and handle them.
-	 * @param target The element where token data is appended.
-	 * @param tokens The token stream. This will be consumed.
-	 * @param data Any data to pass to tokens (from the 'render' call)
-	 */
-	consumeTokens(target: Node, tokens: Token[], data: {}) {
-		while (tokens.length) {
-			let token = tokens.shift();
-			if (isText(token)) {
-				this.handleText(target, token);
-			} else if (isField(token)) {
-				this.handleField(target, token, tokens, data);
-			} else if (isNode(token)) {
-				this.handleNode(target, token, data);
-			}
-		}
-	}
-
-	private handleNode(target: Node, token: NodeToken, data: {}) {
-		if (!token.node) {
-			return;
-		}
-
-		target.appendChild(token.node);
-		Template.resolveAttributes(token.node, data);
-		this.consumeTokens(token.node, token.tokens, data);
-	}
-
-	private handleField(
-		target: Node,
-		fieldToken: FieldToken,
-		tokens: Token[],
-		data: {})
-	{
-		if (fieldToken.field[0] === '#') {
-			let helper = Template.findHelper(fieldToken.field.substr(1));
-			if (helper) {
-				let block = new Block(fieldToken, tokens);
-				helper.run(target, this, block, data);
-			}
-		} else {
-			let field = resolvePath(data, fieldToken.field);
-			append(target, field);
-		}
-	}
-
-	private handleText(target: Node, token: TextToken) {
-		append(target, token.text);
-	}
-
-	private static parse(templateContainer: Node): Token[] {
-		let nodes = slice(templateContainer.childNodes);
-		if (templateContainer.nodeType === Node.TEXT_NODE) {
-			nodes = [templateContainer];
-		}
-
-		let tokens = [];
-
-		for (let node of nodes) {
-			if (node.nodeType === Node.TEXT_NODE) {
-				let re = /(.*?){{(.+?)}}|(.+)/ig;
-				let text = node.textContent;
-				let results = [];
-				while (results = re.exec(text)) {
-					text = text.substr(re.lastIndex);
-					re.lastIndex = 0;
-					if (results[3]) {
-						tokens.push({ type: 'text', text: results[3] });
-					} else {
-						tokens.push({ type: 'text', text: results[1] });
-						tokens.push({ type: 'field', field: results[2] });
-					}
-				}
-
-				tokens.push({ type: 'text', text: text });
-			} else {
-				let parsed = Template.parse(node);
-				tokens.push({ type: 'node', node: node, tokens: parsed });
-			}
-		}
-
-		return tokens;
-	}
-
-	private static resolveAttributes(e: Node, data: {}) {
-		if (e instanceof Element && e.attributes.length) {
-			let attributes = slice(e.attributes);
-			for (let attr of attributes) {
-				let value = e.getAttribute(attr.name);
-				value = replaceText(value, data);
-				e.setAttribute(attr.name, value);
-			}
-		}
-	}
+	return $(target).contents();
+    }
 }
 
-function append(target: Node, content: any) {
-	let node: Node = null;
-	if (content instanceof Node) {
-		node = content;
-	} else if (isJQuery(content)) {
-		node = content[0];
-	} else if (content != null) {
-		node = document.createTextNode(content.toString());
+// The 'each' helper loops over the collection passed to it,
+// calling the default branch with the context set to each item
+// in turn. If the collection is empty (or isn't a collection),
+// then the 'else' branch is called with the original context.
+Template.helpers['each'] = {
+    renderInto: function (target, data, block) {
+	let collection = resolvePath(block.path, data);
+	if (hasLength(collection)) {
+	    for (let item of collection) {
+		for (let recipe of block.defaultBranch) {
+		    recipe.renderInto(target, item);
+		}
+	    }
+	} else {
+	    for (let recipe of block.elseBranch) {
+		recipe.renderInto(target, data);
+	    }
+	}
+    }
+};
+
+// The 'if' helper checks whether the value passed to it is
+// truthy. If it is, then the default branch is called. Otherwise,
+// the 'else' branch is called.
+Template.helpers['if'] = {
+    renderInto: function (target, data, block) {
+	let result = resolvePath(block.path, data);
+	let branch = block.defaultBranch;
+	if (!result) {
+	    branch = block.elseBranch;
 	}
 
-	target.appendChild(node);
-}
+	for (let recipe of branch) {
+	    recipe.renderInto(target, data);
+	}
+    }
+};
+
+// The 'with' helper is very much like the 'if' helper,
+// except that before calling its default branch, it sets
+// the context to the value being tested. During the 'else'
+// branch, the context is unchanged.
+Template.helpers['with'] = {
+    renderInto: function (target, data, block) {
+	let result = resolvePath(block.path, data);
+	if (result) {
+	    for (let recipe of block.defaultBranch) {
+		recipe.renderInto(target, result);
+	    }
+	} else {
+	    for (let recipe of block.elseBranch) {
+		recipe.renderInto(target, data);
+	    }
+	}
+    }
+};
 
 /**
- * Replace any placeholders of the form {{field}} in the given string.
- * @param template A string containing placeholders.
- * @param data Data used to resolve placeholders.
+ * Quick & dirty lookup table
  */
-function replaceText(template: string, data: {}): string {
-	return template.replace(/{{(\S+)}}/ig, (match, path) => {
-		let field = resolvePath(data, path);
-		if (field != null) return field.toString();
-		return '';
-	});
+export interface HashMap<T> {
+    [name: string]: T;
 }
 
 /**
- * Make a shallow clone of the given node, including its attributes
- * but not its child nodes.
- * @param e The node to clone.
- */
-function shallowClone(e: Node): Node {
-	if (e.nodeType === Node.TEXT_NODE) {
-		return document.createTextNode(e.textContent);
-	} else if (e.nodeType !== Node.ELEMENT_NODE) {
-		return null;
-	}
-
-	let clone = document.createElement(e.nodeName);
-	for (let attr of slice(e.attributes)) {
-		clone.setAttribute(attr.name, attr.value);
-	}
-
-	return clone;
-}
-
-/**
- * ADVANCED: Resolve the text version of a property path on an object.
- * @param data The object.
- * @param path The property path, e.g. 'foo.bar'.
- */
-export function resolvePath(data: {}, path: string) {
-	for (let name of path.split('.')) {
-		if (data == null) break;
-		if (name !== 'this') {
-			data = data[name];
-		}
-	}
-
-	return data;
-}
-
-/**
- * ADVANCED: A token, parsed from a template.
- * This is used to run the template engine.
- */
-export type Token = TextToken | NodeToken | FieldToken;
-
-export interface TextToken {
-	type: 'text';
-	text: string;
-}
-
-export function isText(t: Token): t is TextToken {
-	return t.type === 'text';
-}
-
-export interface NodeToken {
-	type: 'node';
-	node: Node;
-	tokens: Token[];
-}
-
-export function isNode(t: Token): t is NodeToken {
-	return t.type === 'node';
-}
-
-export interface FieldToken {
-	type: 'field';
-	field: string;
-}
-
-export function isField(t: Token): t is FieldToken {
-	return t.type === 'field';
-}
-
-/**
- * ADVANCED: A helper function that can be invoked from a template
- * via the block syntax {{#foo}}{{/foo}}
+ * ADVANCED
+ * Helpers are blocks of logic that can be invoked from templates
+ * via the {{#block args}}...{{/block}} syntax.
  */
 export interface Helper {
-	/** The name of the helper */
-	name: string;
-	run: (e: Node, template: Template, block: Block, data: {}) => void;
+    /**
+     * Render this helper into the target element with the given data.
+     * @param target The target element
+     * @param data Data used to resolve placeholders
+     * @param block The recipe parsed from the original template.
+     * This contains the block branches & any arguments.
+     */
+    renderInto(target: Element, data: {}, block: BlockRecipe): void;
 }
 
 /**
- * ADVANCED: A block of tokens appearing between block delimiters
+ * ADVANCED
+ * Recipes are what actually render content within a template.
  */
-export class Block {
-	constructor(blockStart: FieldToken, tokens: Token[]) {
-		this.first = [];
-		this.second = [];
-
-		let depth = 1;
-		let block = this.first;
-		this.arg = blockStart.field.substr(blockStart.field.indexOf(' ') + 1);
-		while (tokens.length) {
-			let token = tokens.shift();
-			if (isField(token)) {
-				if (token.field[0] === '/') {
-					if (--depth === 0) {
-						break;
-					}
-				} else if (token.field[0] === '#') {
-					depth++;
-				} else if (token.field === 'else' && depth === 1) {
-					block = this.second;
-					continue;
-				}
-			}
-
-			block.push(token);
-		}
-	}
-
-	/** The argument string passed into the opening block delimiter */
-	arg: string;
-
-	/** The tokens appearing between delimiters, before the {{else}} */
-	first: Token[];
-
-	/** The tokens after the {{else}} */
-	second: Token[];
+export interface Recipe {
+    renderInto(target: Element, data: {}): void;
 }
 
 /**
- * ADVANCED: Make a clone of the token stream.
- * @param tokens The token stream.
+ * ADVANCED
+ * A block recipe is the parsed version of a helper invocation.
+ * You should use this class from your helper to execute one of
+ * its branches (or possibly both).
  */
-export function cloneTokens(tokens: Token[]): Token[] {
-	let clone = [];
-	for (let token of tokens) {
-		if (isNode(token)) {
-			clone.push({
-				type: 'node',
-				node: shallowClone(token.node),
-				tokens: cloneTokens(token.tokens)
-			});
-		} else {
-			clone.push(token);
-		}
+export class BlockRecipe implements Recipe {
+    name: string;
+    path: string[];
+    currentBranch: Recipe[];
+    defaultBranch: Recipe[];
+    elseBranch: Recipe[];
+    helper: Helper;
+
+    constructor(block: BlockStartToken) {
+	this.name = block.name;
+	this.path = block.path;
+	this.defaultBranch = [];
+	this.elseBranch = [];
+	this.currentBranch = this.defaultBranch;
+	this.helper = Template.helpers[this.name];
+	if (!this.helper) {
+	    throw new UnknownHelperError(this.name);
+	}
+    }
+
+    pushRecipe(recipe: Recipe) {
+	if (recipe instanceof FieldRecipe
+	    && recipe.path.length === 1
+	    && recipe.path[0] === 'else') {
+	    this.currentBranch = this.elseBranch;
+	    return;
 	}
 
-	return clone;
+	this.currentBranch.push(recipe);
+    }
+
+    renderInto(target: Element, data: {}) {
+	this.helper.renderInto(target, data, this);
+    }
 }
 
-Template.registerHelper({
-	name: 'with',
-	run: function (element, template, block, data) {
-		let newContext = resolvePath(data, block.arg);
-		let choice = newContext ? block.first : block.second;
-		template.consumeTokens(element, choice, newContext);
-	}
-});
+/**
+ * ADVANCED
+ * The token that begins a helper invocation.
+ */
+export class BlockStartToken {
+    name: string;
+    path: string[];
 
-Template.registerHelper({
-	name: 'if',
-	run: function (element, template, block, data) {
-		let result = resolvePath(data, block.arg);
-		let branch = result ? block.first : block.second;
-		template.consumeTokens(element, branch, data);
-	}
-});
-
-Template.registerHelper({
-	name: 'each',
-	run: function (element, template, block, data) {
-		let field = resolvePath(data, block.arg);
-		if (hasLength(field)) {
-			for (let item of field) {
-				let copy = cloneTokens(block.first);
-				template.consumeTokens(element, copy, item);
-			}
-		} else {
-			template.consumeTokens(element, block.second, data);
-		}
-	}
-});
-
-function hasLength(x: any): x is any[] {
-	return x != null && x.length;
+    constructor(text: string) {
+	let split = text.split(' ');
+	this.name = split[0].substr(1);
+	this.path = split[1].split('.');
+    }
 }
+
+////////////////////////////////
+//// Implementation details ////
+////////////////////////////////
+
+/**
+ * A token is the first step from raw text to executable template.
+ * A flat stream of these tokens eventually becomes a tree structure
+ * of recipes, which is used to render the template.
+ */
+type Token
+    = NodeToken
+    | FieldToken
+    | TextToken
+    | BlockStartToken
+    | BlockEndToken;
+
+class NodeToken {
+    nodeName: string;
+    attributes: AttributeRecipe[];
+    childTokens: Token[];
+
+    constructor(e: Element) {
+	this.nodeName = e.nodeName;
+	this.attributes = [];
+	for (let attr of slice(e.attributes)) {
+	    this.attributes.push({
+		name: attr.name,
+		value: attr.value
+	    });
+	}
+
+	this.childTokens = nodesToTokens(slice(e.childNodes));
+    }
+}
+
+class FieldToken {
+    path: string[];
+
+    constructor(text: string) {
+	this.path = text.split('.');
+    }
+}
+
+class BlockEndToken {
+    name: string;
+
+    constructor(text: string) {
+	this.name = text.substr(1);
+    }
+}
+
+class TextToken {
+    text: string;
+
+    constructor(text: string) {
+	this.text = text;
+    }
+}
+
+interface AttributeRecipe {
+    name: string;
+    value: string;
+}
+
+/**
+ * The parse state is used to convert a token stream to
+ * a recipe stream.
+ */
+class ParseState {
+    private index: number;
+    private tokens: Token[];
+    private recipes: Recipe[];
+    private length: number;
+    private blockState: BlockRecipe[];
+
+    constructor(tokens: Token[]) {
+	this.index = 0;
+	this.tokens = tokens;
+	this.recipes = [];
+	this.length = tokens.length;
+	this.blockState = [];
+    }
+
+    /**
+     * Consume the tokens in the token stream, producing recipes.
+     */
+    parseToEnd() {
+	while (!this.atEndOfStream()) {
+	    let token = this.nextToken();
+	    if (token instanceof NodeToken) {
+		this.pushRecipe(new NodeRecipe(token));
+	    } else if (token instanceof FieldToken) {
+		this.pushRecipe(new FieldRecipe(token));
+	    } else if (token instanceof TextToken) {
+		this.pushRecipe(new TextRecipe(token.text));
+	    } else if (token instanceof BlockStartToken) {
+		this.startBlock(token);
+	    } else if (token instanceof BlockEndToken) {
+		this.endBlock(token);
+	    } else {
+		throw new InvalidTokenError(token);
+	    }
+	}
+
+	return this.recipes;
+    }
+
+    private endBlock(end: BlockEndToken) {
+	let block = this.blockState.pop();
+	if (block.name !== end.name) {
+	    throw new UnexpectedBlockEndError(end);
+	}
+
+	this.pushRecipe(block);
+    }
+
+    private startBlock(block: BlockStartToken) {
+	let recipe = new BlockRecipe(block);
+	this.blockState.push(recipe);
+    }
+
+    private atEndOfStream() {
+	return this.index >= this.length;
+    }
+
+    private nextToken() {
+	return this.tokens[this.index++];
+    }
+
+    private pushRecipe(recipe: Recipe) {
+	let length = this.blockState.length;
+	if (length) {
+	    this.blockState[length - 1].pushRecipe(recipe);
+	} else {
+	    this.recipes.push(recipe);
+	}
+    }
+}
+
+/**
+ * A simple text literal with no placeholders.
+ */
+class TextRecipe implements Recipe {
+    text: string;
+    constructor(text: string) {
+	this.text = text;
+    }
+
+    renderInto(target: Element, data: {}) {
+	target.appendChild(document.createTextNode(this.text));
+    }
+}
+
+/**
+ * A placeholder that references a field in the context.
+ */
+class FieldRecipe implements Recipe {
+    path: string[];
+    constructor(token: FieldToken) {
+	this.path = token.path;
+    }
+
+    renderInto(target: Element, data: {}) {
+	data = resolvePath(this.path, data);
+	if (data instanceof Node) {
+	    target.appendChild(data);
+	} else if (isJQuery(data)) {
+	    data.each(function (i, el) {
+		target.appendChild(el);
+	    });
+	} else if (data != null) {
+	    target.appendChild(document.createTextNode(data.toString()));
+	}
+    }
+}
+
+/**
+ * A node that contains attributes & more recipes.
+ */
+class NodeRecipe implements Recipe {
+    static placeholderRegex = /{{(.+?)}}/;
+    nodeName: string;
+    attributes: AttributeRecipe[];
+    childRecipes: Recipe[];
+
+    constructor(token: NodeToken) {
+	this.nodeName = token.nodeName;
+	this.attributes = token.attributes;
+	this.childRecipes = tokensToRecipes(token.childTokens);
+    }
+
+    renderInto(target: Element, data: {}) {
+	let element = document.createElement(this.nodeName);
+	for (let attr of this.attributes) {
+	    let value = NodeRecipe.replacePlaceholders(attr.value, data);
+	    element.setAttribute(attr.name, value);
+	}
+
+	for (let recipe of this.childRecipes) {
+	    recipe.renderInto(element, data);
+	}
+
+	target.appendChild(element);
+    }
+
+    static replacePlaceholders(template: string, data: {}) {
+	return template.replace(NodeRecipe.placeholderRegex, function (match, path) {
+	    let pieces = path.split('.');
+	    let value = resolvePath(pieces, data);
+	    if (value != null) {
+		return value.toString();
+	    }
+
+	    return '';
+	});
+    }
+}
+
+class UnknownHelperError extends Error {
+    constructor(name: string) {
+	super(`Unknown helper '${name}'`);
+    }
+}
+
+class InvalidTokenError extends Error {
+    constructor(token: any) {
+	let json = JSON.stringify(token);
+	let message = `Unknown token: ${json}`;
+	super(message);
+    }
+}
+
+class UnexpectedBlockEndError extends Error {
+    constructor(token: BlockEndToken) {
+	let message = `Unexpected end of block '${token.name}'`;
+	super(message);
+    }
+}
+
+/**
+ * Matches placeholders in text. Returns three captured groups in
+ * one of two states. In the first state, only group 3 is set. This indicates
+ * that no placeholder was found. In the second state, group 1 is set to
+ * the text before the placeholder, and group 2 is set to the text found inside
+ * the placeholder.
+ */
+const PLACEHOLDER_RX = /(.*?){{(.+?)}}|(.+)/g;
 
 function isJQuery(x: any): x is JQuery {
-	return x instanceof $;
+    return x instanceof $;
 }
 
-interface ArrayLike<T> {
-	[index: number]: T;
-	length: number;
+function optimizeRecipes(recipes: Recipe[]) {
+    return squashTextRecipes(recipes);
 }
 
-function slice<T>(x: ArrayLike<T>): T[] {
-	return Array.prototype.slice.call(x);
+/**
+ * Combine all adjacent text recipes.
+ * @param recipes The recipes to optimize.
+ */
+function squashTextRecipes(recipes: Recipe[]) {
+    let optimized = [];
+    let lastTextRecipe = null;
+    for (let recipe of recipes) {
+	if (lastTextRecipe) {
+	    if (recipe instanceof TextRecipe) {
+		lastTextRecipe.text += recipe.text;
+	    } else {
+		optimized.push(lastTextRecipe);
+		optimized.push(recipe);
+		lastTextRecipe = null;
+	    }
+	} else if (recipe instanceof TextRecipe) {
+	    lastTextRecipe = recipe;
+	} else {
+	    optimized.push(recipe);
+	}
+    }
+
+    return optimized;
+}
+
+function hasLength(x: any): x is any[] {
+    return x && x.length;
+}
+
+function tokensToRecipes(tokens: Token[]) {
+    let state = new ParseState(tokens);
+    return state.parseToEnd();
+}
+
+/**
+ * Given an array of property names, traverse them on
+ * the given data and return the final value. The special
+ * property name 'this' does no traversal.
+ * @param path The path of property names.
+ * @param data The data to traverse.
+ */
+function resolvePath(path: string[], data: {}) {
+    for (let piece of path) {
+	if (piece !== 'this' && data) {
+	    data = data[piece];
+	}
+    }
+
+    return data;
+}
+
+function parseTokens(template: string) {
+    let nodes = parseDOM(template);
+    return nodesToTokens(nodes);
+}
+
+/**
+ * Parse a series of nodes into tokens.
+ * @param nodes The nodes to parse.
+ */
+function nodesToTokens(nodes: Node[]) {
+    let tokens = [];
+    for (let node of nodes) {
+	if (node.nodeType === Node.TEXT_NODE) {
+	    for (let token of parseTextTokens(node.textContent)) {
+		tokens.push(token);
+	    }
+	} else if (node.nodeType === Node.ELEMENT_NODE) {
+	    tokens.push(new NodeToken(node as Element));
+	}
+    }
+
+    return tokens;
+}
+
+function parsePlaceholderToken(text: string): Token {
+    switch (text[0]) {
+    case '#':
+	return new BlockStartToken(text);
+    case '/':
+	return new BlockEndToken(text);
+    default:
+	return new FieldToken(text);
+    }
+}
+
+/**
+ * Parse the given text into text, block, and field tokens.
+ * @param text The text to parse.
+ */
+function parseTextTokens(text: string) {
+    let result = null;
+    let tokens = [];
+    while (result = PLACEHOLDER_RX.exec(text)) {
+	if (result[3]) {
+	    tokens.push(new TextToken(result[3]));
+	    continue;
+	}
+
+	tokens.push(new TextToken(result[1]));
+	tokens.push(parsePlaceholderToken(result[2]));
+    }
+
+    PLACEHOLDER_RX.lastIndex = 0;
+    return tokens;
+}
+
+/**
+ * Parse the given raw HTML into a series of nodes.
+ * @param rawHTML The raw HTML to parse.
+ */
+function parseDOM(rawHTML: string) {
+    let temp = document.createElement('div');
+    temp.innerHTML = rawHTML;
+    return slice(temp.childNodes);
+}
+
+/**
+ * Make a shallow array copy of an array-like object.
+ * @param array The object to copy.
+ */
+function slice<T>(array: ArrayLike<T>): T[] {
+    return Array.prototype.slice.call(array);
 }

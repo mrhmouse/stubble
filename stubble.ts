@@ -283,7 +283,7 @@ class ParseState {
     private endBlock(end: BlockEndToken) {
 	let block = this.blockState.pop();
 	if (block.name !== end.name) {
-	    throw new UnexpectedBlockEndError(end);
+	    throw new UnexpectedBlockEndError(end.name, block.name);
 	}
 
 	this.pushRecipe(block);
@@ -393,22 +393,21 @@ class NodeRecipe implements Recipe {
 
 class UnknownHelperError extends Error {
     constructor(name: string) {
-	super(`Unknown helper '${name}'`);
+	this.message = `Unknown helper '${name}'`;
     }
 }
 
 class InvalidTokenError extends Error {
     constructor(token: any) {
 	let json = JSON.stringify(token);
-	let message = `Unknown token: ${json}`;
-	super(message);
+	this.message = `Unknown token: ${json}`;
     }
 }
 
 class UnexpectedBlockEndError extends Error {
-    constructor(token: BlockEndToken) {
-	let message = `Unexpected end of block '${token.name}'`;
-	super(message);
+    constructor(saw: string, expected: string) {
+	this.message =
+            `Unexpected end of block. Saw '${saw}' but expected '${expected}'`;
     }
 }
 

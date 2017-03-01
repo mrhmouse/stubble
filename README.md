@@ -1,3 +1,19 @@
+# This project is no longer maintained
+Because of subtle issues with the HTML spec, there are unfixable bugs with this template engine. For example, it's not possible to dynamically create table rows:
+
+```html
+<table>
+  {{#each items}}
+    <tr>
+      <td>{{name}}</td>
+      <td>{{color}}</td>
+    </tr>
+  {{/each}}
+</table>
+```
+
+Given the template above, the spec says that the text content outside of `<td>` should be lifted up out of its original position. This obviously breaks the template.
+
 # Stubble
 Stubble is a templating language for the browser, based loosely on Mustache's syntax.
 
